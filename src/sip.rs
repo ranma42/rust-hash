@@ -1,38 +1,29 @@
-// Copyright 2012-2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
-//! An implementation of SipHash 2-4.
-
 use std::ptr;
 
-/// An implementation of SipHash 2-4.
-///
-/// See: http://131002.net/siphash/
-///
-/// Consider this as a main "general-purpose" hash for all hashtables: it
-/// runs at good speed (competitive with spooky and city) and permits
-/// strong _keyed_ hashing. Key your hashtables from a strong RNG,
-/// such as `rand::Rng`.
-///
-/// Although the SipHash algorithm is considered to be cryptographically
-/// strong, this implementation has not been reviewed for such purposes.
-/// As such, all cryptographic uses of this implementation are strongly
-/// discouraged.
-pub struct SipHasher {
+use ::traits::{HashContext, HashFunction};
+
+pub struct SipHashFunction {
     k0: u64,
     k1: u64,
+}
+
+impl SipHashFunction {
+    #[inline]
+    pub fn new() -> SipHashFunction {
+        SipHashFunction::new_with_keys(0, 0)
+    }
+
+    #[inline]
+    pub fn new_with_keys(k0: u64, k1: u64) -> SipHashFunction {
+        SipHashFunction {
+            k0: k0,
+            k1: k1,
+        }
+    }
+}
+
+pub struct SipContext {
     length: usize, // how many bytes we've processed
-    // v0, v2 and v1, v3 show up in pairs in the algorithm,
-    // and simd implementations of SipHash will use vectors
-    // of v02 and v13. By placing them in this order in the struct,
-    // the compiler can pick up on just a few simd optimizations by itself.
     v0: u64,      // hash state
     v2: u64,
     v1: u64,
@@ -40,10 +31,6 @@ pub struct SipHasher {
     tail: u64, // unprocessed bytes le
     ntail: usize,  // how many bytes in tail are valid
 }
-
-// sadly, these macro definitions can't appear later,
-// because they're needed in the following defs;
-// this design could be improved.
 
 macro_rules! u8to64_le {
     ($buf:expr, $i:expr) =>
@@ -111,43 +98,11 @@ macro_rules! compress {
         })
 }
 
-impl SipHasher {
-    /// Creates a new `SipHasher` with the two initial keys set to 0.
-    #[inline(always)]
-    pub fn new() -> SipHasher {
-        SipHasher::new_with_keys(0, 0)
-    }
-
-    /// Creates a `SipHasher` that is keyed off the provided keys.
-    #[inline(always)]
-    pub fn new_with_keys(key0: u64, key1: u64) -> SipHasher {
-        let mut state = SipHasher {
-            k0: key0,
-            k1: key1,
-            length: 0,
-            v0: 0,
-            v1: 0,
-            v2: 0,
-            v3: 0,
-            tail: 0,
-            ntail: 0,
-        };
-        state.reset();
-        state
-    }
+impl HashContext for SipContext {
+    type Result = u64;
 
     #[inline(always)]
-    fn reset(&mut self) {
-        self.length = 0;
-        self.v0 = self.k0 ^ 0x736f6d6570736575;
-        self.v1 = self.k1 ^ 0x646f72616e646f6d;
-        self.v2 = self.k0 ^ 0x6c7967656e657261;
-        self.v3 = self.k1 ^ 0x7465646279746573;
-        self.ntail = 0;
-    }
-
-    #[inline(always)]
-    pub fn write(&mut self, msg: &[u8]) {
+    fn update(&mut self, msg: &[u8]) {
         let length = msg.len();
         self.length += length;
 
@@ -192,7 +147,7 @@ impl SipHasher {
     }
 
     #[inline(always)]
-    pub fn flush(&self) -> u64 {
+    fn finish(self) -> u64 {
         let mut v0 = self.v0;
         let mut v1 = self.v1;
         let mut v2 = self.v2;
@@ -212,5 +167,22 @@ impl SipHasher {
         compress!(v0, v1, v2, v3);
 
         v0 ^ v1 ^ v2 ^ v3
+    }
+}
+
+impl HashFunction for SipHashFunction {
+    type Context = SipContext;
+    
+    #[inline(always)]
+    fn init(&self) -> SipContext {
+        SipContext {
+            v0: self.k0 ^ 0x736f6d6570736575,
+            v1: self.k1 ^ 0x646f72616e646f6d,
+            v2: self.k0 ^ 0x6c7967656e657261,
+            v3: self.k1 ^ 0x7465646279746573,
+            length: 0,
+            tail: 0,
+            ntail: 0,
+        }
     }
 }
